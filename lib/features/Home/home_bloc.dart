@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:open_ai_bot/Services/speech_service.dart';
@@ -58,10 +59,27 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
 
   Future initTTS() async {
     var initSuccess = await speechService.init();
-    if (initSuccess) {
-      await mPlayer.openPlayer();
-      await mPlayer.startPlayerFromStream(codec: Codec.pcm16, numChannels: 1, sampleRate: sampleRate);
-    }
+    openAudioSession().then((value) async {
+      if (initSuccess) {
+        await mPlayer.openPlayer();
+        await mPlayer.startPlayerFromStream(codec: Codec.pcm16, numChannels: 1, sampleRate: sampleRate);
+      }
+    });
+  }
+
+  Future openAudioSession() async {
+    final session = await AudioSession.instance;
+    await session.configure(AudioSessionConfiguration(avAudioSessionCategory: AVAudioSessionCategory.playAndRecord, 
+                                                      avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth | 
+                                                                                     AVAudioSessionCategoryOptions.defaultToSpeaker,
+                                                      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+                                                      avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+                                                      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+                                                      androidAudioAttributes: const AndroidAudioAttributes(contentType: AndroidAudioContentType.speech,
+                                                                                                           flags: AndroidAudioFlags.none,
+                                                                                                           usage: AndroidAudioUsage.voiceCommunication),
+                                                      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+                                                      androidWillPauseWhenDucked: true));
   }
 
   Future startListening() async {
@@ -74,7 +92,7 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
   }
 
   void statusListener(String status) async {
-    if (status == "done") {
+    if (status == "done" && recognizedText != "") {
       BotResponseActivity result = await botService.sendMessage(recognizedText);
       add(StopRecordingEvent());
       if (result.activityId != "") {
@@ -92,6 +110,8 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
       } else {
         add(WaitingForUserEvent());
       }
+    } else if (status == "done" && recognizedText == "") {
+      add(WaitingForUserEvent());
     }
   }
 
