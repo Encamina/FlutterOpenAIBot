@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_sound/flutter_sound.dart';
+import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:open_ai_bot/Services/speech_service.dart';
 import 'package:open_ai_bot/constants/constants.dart';
 import 'package:open_ai_bot/models/bot_response_activity.dart';
@@ -20,8 +21,6 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
   late final SpeechToText stt;
   late final String token;
   String recognizedText = "";
-  final FlutterSoundPlayer mPlayer = FlutterSoundPlayer();
-  StreamSubscription? mPlayerSubscription;
 
   HomeBloc(this.botService, this.speechService) : super(HomeState.initial()) {
     on<WaitingForUserEvent>((event, emit) => waitingForUserToState(emit));
@@ -31,6 +30,7 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
 
     initSTT();
     initTTS();
+    initAudioPlayer();
     botService.initConversation();
   }
 
@@ -58,33 +58,20 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
   }
 
   Future initTTS() async {
-    var initSuccess = await speechService.init();
-    openAudioSession().then((value) async {
-      if (initSuccess) {
-        await mPlayer.openPlayer();
-        await mPlayer.startPlayerFromStream(codec: Codec.pcm16, numChannels: 1, sampleRate: sampleRate);
-      }
-    });
+    await speechService.init();
   }
 
-  Future openAudioSession() async {
-    final session = await AudioSession.instance;
-    await session.configure(AudioSessionConfiguration(avAudioSessionCategory: AVAudioSessionCategory.playAndRecord, 
-                                                      avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth | 
-                                                                                     AVAudioSessionCategoryOptions.defaultToSpeaker,
-                                                      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-                                                      avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
-                                                      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-                                                      androidAudioAttributes: const AndroidAudioAttributes(contentType: AndroidAudioContentType.speech,
-                                                                                                           flags: AndroidAudioFlags.none,
-                                                                                                           usage: AndroidAudioUsage.voiceCommunication),
-                                                      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-                                                      androidWillPauseWhenDucked: true));
+  Future initAudioPlayer() async {
+      var session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(avAudioSessionCategory: AVAudioSessionCategory.playAndRecord, avAudioSessionMode: AVAudioSessionMode.spokenAudio));
+      await session.setActive(true);
+      await FlutterPcmSound.setup(sampleRate: sampleRate, channelCount: 1);
+      await FlutterPcmSound.setFeedThreshold(1);
   }
 
   Future startListening() async {
     recognizedText = "";
-    stt.listen(onResult: resultListener );
+    stt.listen(onResult: resultListener, pauseFor: const Duration(seconds: 2) );
   }
 
   Future stopListening() async {
@@ -92,8 +79,16 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
   }
 
   void statusListener(String status) async {
-    if (status == "done" && recognizedText != "") {
+    if (status == "done" && recognizedText != "" && Platform.isAndroid) {
+      processResponse();
+    } else if (status == "done" && recognizedText == "") {
+      add(WaitingForUserEvent());
+    }
+  }
+
+  Future processResponse() async {
       BotResponseActivity result = await botService.sendMessage(recognizedText);
+      recognizedText = "";
       add(StopRecordingEvent());
       if (result.activityId != "") {
         var responses = await botService.getResponses(result.activityId);
@@ -101,18 +96,25 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
           for (var element in responses) {
             var responseFromSpeech = await speechService.textToSpeech(element.message);
             add(SpeakResponseFromBotEvent());
-            feedAudioToPlayer(responseFromSpeech);
-            mPlayer.foodSink!.add(FoodEvent(() async {
-              add(WaitingForUserEvent());
-            }));
+            await playAudioResponse(responseFromSpeech);
+            add(WaitingForUserEvent());
           }
         }
       } else {
         add(WaitingForUserEvent());
       }
-    } else if (status == "done" && recognizedText == "") {
-      add(WaitingForUserEvent());
+  }
+
+  Future playAudioResponse(Uint8List responseFromSpeech) async {
+    var audio = responseFromSpeech.buffer.asInt16List(0);
+    await FlutterPcmSound.feed(PcmArrayInt16.fromList(audio));
+    await FlutterPcmSound.play();
+    var remainingFrames = await FlutterPcmSound.remainingFrames();
+    while (remainingFrames > 0) {
+      remainingFrames = await FlutterPcmSound.remainingFrames();
     }
+    await FlutterPcmSound.stop();
+    await FlutterPcmSound.clear();
   }
 
   void errorListener(SpeechRecognitionError error) {
@@ -121,17 +123,9 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
   void resultListener(SpeechRecognitionResult result) {
     if (result.recognizedWords != "") {
       recognizedText = " ${result.recognizedWords}";
-    }
-  }
-
-  void feedAudioToPlayer(Uint8List data) {
-    var start = 0;
-    var totalLength = data.length;
-    while (totalLength > 0 && !mPlayer.isStopped) {
-      var ln = totalLength > blockSize ? blockSize : totalLength;
-      mPlayer.foodSink!.add(FoodData(data.sublist(start, start + ln)));
-      totalLength -= ln;
-      start += ln;
+      if (result.finalResult && Platform.isIOS) {
+        processResponse();
+      }
     }
   }
 }
