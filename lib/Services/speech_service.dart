@@ -42,7 +42,7 @@ class SpeechService {
     return {HttpHeaders.contentTypeHeader: "application/ssml+xml", 
             HttpHeaders.authorizationHeader: "Bearer $token",
             HttpHeaders.userAgentHeader: "PropulsionBotDemoFlutter",
-            "X-Microsoft-OutputFormat" : "riff-24khz-16bit-mono-pcm",
+            "X-Microsoft-OutputFormat" : "riff-44100hz-16bit-mono-pcm",
             "Host": voiceHost};
   }
 }
