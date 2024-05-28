@@ -14,5 +14,5 @@ const String voicePath = "cognitiveservices/v1";
 const String speechApiKey = "[PUT HERE YOUR SPEECH SERVICE API KEY]";
 
 //PLAYER VALUES
-const int sampleRate = 24000;
+const int sampleRate = 44100;
 const int blockSize = 32768;

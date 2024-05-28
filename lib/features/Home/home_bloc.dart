@@ -71,7 +71,9 @@ class HomeBloc extends Bloc<HomeEvents, HomeState> {
 
   Future startListening() async {
     recognizedText = "";
-    stt.listen(onResult: resultListener, pauseFor: const Duration(seconds: 2) );
+    var installedLocales = await stt.locales();
+    var locale = installedLocales.firstWhere((element) => element.localeId == "es-ES", orElse: () => installedLocales.first);
+    stt.listen(onResult: resultListener, pauseFor: const Duration(seconds: 2), localeId: locale.localeId );
   }
 
   Future stopListening() async {
